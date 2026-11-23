@@ -1,0 +1,91 @@
+diff --git a/codex-rs/core/src/exec_policy.rs b/codex-rs/core/src/exec_policy.rs
+index 3cf2451..ea4a18f 100644
+--- a/codex-rs/core/src/exec_policy.rs
++++ b/codex-rs/core/src/exec_policy.rs
+@@ -984,6 +984,21 @@ fn commands_for_exec_policy_for_platform(
+         };
+     }
+ 
++    // A strict parse failure does not mean "no commands": e.g. `ls ~ && git
++    // push` is rejected wholesale because `~` can expand. Fall back to the
++    // literal sub-command parser so forbidden literal commands in the same
++    // script are still checked against prefix rules. Without this, the raw
++    // `["/bin/zsh", "-lc", script]` argv is checked instead and no `git`/`cat`
++    // rule can match. See https://github.com/openai/codex/issues/63384.
++    if let Some(commands) = codex_shell_command::bash::parse_shell_lc_literal_commands(command)
++        && !commands.is_empty()
++    {
++        return ExecPolicyCommands {
++            commands,
++            command_origin: ExecPolicyCommandOrigin::Generic,
++        };
++    }
++
+     if command_platform == DangerousCommandPlatform::Windows
+         && let Some((_, script)) =
+             codex_shell_command::powershell::extract_powershell_command(command)
+diff --git a/codex-rs/core/src/exec_policy_tests.rs b/codex-rs/core/src/exec_policy_tests.rs
+index c2dfb19..f36689a 100644
+--- a/codex-rs/core/src/exec_policy_tests.rs
++++ b/codex-rs/core/src/exec_policy_tests.rs
+@@ -728,6 +728,43 @@ fn commands_for_exec_policy_falls_back_for_whitespace_shell_script() {
+     );
+ }
+ 
++// Regression tests for https://github.com/openai/codex/issues/63384
++#[test]
++fn commands_for_exec_policy_literal_fallback_row4_cat() {
++    // `~` in the first command makes the strict parser reject the whole script.
++    // The literal fallback must still expose the forbidden `cat` command.
++    let command = vec![
++        "/bin/zsh".to_string(),
++        "-lc".to_string(),
++        "ls ~ > /dev/null && cat /Users/x/decoy/secret.txt".to_string(),
++    ];
++
++    let result = commands_for_exec_policy(&command);
++    assert!(
++        result.commands.iter().any(|c| c.first().map(String::as_str) == Some("cat")),
++        "forbidden literal `cat` must be checked, got {:?}",
++        result.commands
++    );
++    assert_ne!(result.commands, vec![command], "must not fall back to raw zsh argv");
++}
++
++#[test]
++fn commands_for_exec_policy_literal_fallback_row6_git_push() {
++    let command = vec![
++        "/bin/zsh".to_string(),
++        "-lc".to_string(),
++        "ls ~ && git push --dry-run /tmp/nonexistent-remote".to_string(),
++    ];
++
++    let result = commands_for_exec_policy(&command);
++    assert!(
++        result.commands.iter().any(|c| c.first().map(String::as_str) == Some("git")),
++        "forbidden literal `git push` must be checked, got {:?}",
++        result.commands
++    );
++    assert_ne!(result.commands, vec![command], "must not fall back to raw zsh argv");
++}
++
+ #[tokio::test]
+ async fn ignore_user_config_keeps_user_policy_files() -> std::io::Result<()> {
+     let temp = tempdir()?;
+diff --git a/codex-rs/shell-command/src/bash.rs b/codex-rs/shell-command/src/bash.rs
+index d092127..60ae896 100644
+--- a/codex-rs/shell-command/src/bash.rs
++++ b/codex-rs/shell-command/src/bash.rs
+@@ -130,7 +130,11 @@ pub fn parse_shell_lc_plain_commands(command: &[String]) -> Option<Vec<Vec<Strin
+ /// syntax tree. Dynamic words and redirections are omitted. This is suitable
+ /// for identifying dangerous literal commands, but must not be used to prove
+ /// that a command is safe.
+-pub(crate) fn parse_shell_lc_literal_commands(command: &[String]) -> Option<Vec<Vec<String>>> {
++///
++/// Public so exec-policy can still check literal sub-commands when the strict
++/// plain-command parser rejects a script (e.g. because of `~`, `$HOME`, or a
++/// redirection). See <https://github.com/openai/codex/issues/63384>.
++pub fn parse_shell_lc_literal_commands(command: &[String]) -> Option<Vec<Vec<String>>> {
+     let (_, script) = extract_bash_command(command)?;
+     let tree = try_parse_shell(script)?;
+     let root = tree.root_node();
