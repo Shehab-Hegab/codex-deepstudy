@@ -1,0 +1,23 @@
+case                   | strict                             | literal
+----------------------------------------------------------------------------------------------------
+row1 abs cat           | ['cat']                            | ['cat']
+row2 tilde cat         | None                               | ['cat']
+row3 HOME cat          | None                               | ['cat']
+row4 tilde+cat         | None                               | ['cat', 'ls']
+row5 abs git push      | ['git']                            | ['git']
+row6 tilde+git push    | None                               | ['git', 'ls']
+subst                  | None                               | ['echo', 'git']
+nested sh              | ['sh']                             | ['sh']
+redirect no tilde      | None                               | ['python']
+quoted HOME            | None                               | ['cat']
+arg looks like cmd     | ['echo']                           | ['echo']
+safe control           | ['ls', 'git']                      | ['git', 'ls']
+comment only           | None                               | None
+
+=== audit assertions ===
+PASS - row4 strict None (trigger)
+PASS - row4 literal exposes cat
+PASS - row6 literal exposes git
+PASS - substitution command found (conservative)
+PASS - string arg not treated as command
+PASS - comment-only -> empty list (guard skips)

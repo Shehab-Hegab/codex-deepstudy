@@ -1,0 +1,170 @@
+@@ -886,6 +886,21 @@ fn commands_for_exec_policy_for_platform(
+         };
+     }
+ 
++    // A strict parse failure does not mean "no commands": e.g. `ls ~ && git
++    // push` is rejected wholesale because `~` can expand. Fall back to the
++    // literal sub-command parser so forbidden literal commands in the same
++    // script are still checked against prefix rules. Without this, the raw
++    // argv is checked instead and no `git`/`cat` rule can match. See
++    // https://github.com/openai/codex/issues/63384.
++    if let Some(commands) = codex_shell_command::bash::parse_shell_lc_literal_commands(command)
++        && !commands.is_empty()
++    {
++        return ExecPolicyCommands {
++            commands,
++            command_origin: ExecPolicyCommandOrigin::Generic,
++        };
++    }
++
+     if command_platform == DangerousCommandPlatform::Windows
+         && let Some(commands) =
+             codex_shell_command::powershell::parse_powershell_command_into_plain_commands(command)
+@@ -709,6 +709,57 @@ fn commands_for_exec_policy_falls_back_for_whitespace_shell_script() {
+     );
+ }
+ 
++// Regression tests for https://github.com/openai/codex/issues/63384
++#[test]
++fn commands_for_exec_policy_literal_fallback_row4_cat() {
++    // `~` in the first command makes the strict parser reject the whole script.
++    // The literal fallback must still expose the forbidden `cat` command.
++    let command = vec![
++        "/bin/zsh".to_string(),
++        "-lc".to_string(),
++        "ls ~ > /dev/null && cat /Users/x/decoy/secret.txt".to_string(),
++    ];
++
++    let result = commands_for_exec_policy(&command);
++    assert!(
++        result
++            .commands
++            .iter()
++            .any(|c| c.first().map(String::as_str) == Some("cat")),
++        "forbidden literal `cat` must be checked, got {:?}",
++        result.commands
++    );
++    assert_ne!(
++        result.commands,
++        vec![command],
++        "must not fall back to raw zsh argv"
++    );
++}
++
++#[test]
++fn commands_for_exec_policy_literal_fallback_row6_git_push() {
++    let command = vec![
++        "/bin/zsh".to_string(),
++        "-lc".to_string(),
++        "ls ~ && git push --dry-run /tmp/nonexistent-remote".to_string(),
++    ];
++
++    let result = commands_for_exec_policy(&command);
++    assert!(
++        result
++            .commands
++            .iter()
++            .any(|c| c.first().map(String::as_str) == Some("git")),
++        "forbidden literal `git push` must be checked, got {:?}",
++        result.commands
++    );
++    assert_ne!(
++        result.commands,
++        vec![command],
++        "must not fall back to raw zsh argv"
++    );
++}
++
+ #[tokio::test]
+ async fn ignore_user_config_keeps_user_policy_files() -> std::io::Result<()> {
+     let temp = tempdir()?;
+@@ -22,7 +22,7 @@ pub fn try_parse_shell(shell_lc_arg: &str) -> Option<Tree> {
+ /// Parse a script which may contain multiple simple commands joined only by
+ /// the safe logical/pipe/sequencing operators: `&&`, `||`, `;`, `|`.
+ ///
+-/// Returns `Some(Vec<command_words>)` if every command is a plain wordظّonly
++/// Returns `Some(Vec<command_words>)` if every command is a plain word╪╕^@┘ّonly
+ /// command and the parse tree does not contain disallowed constructs
+ /// (parentheses, redirections, substitutions, control flow, etc.). Otherwise
+ /// returns `None`.
+@@ -133,7 +133,11 @@ pub fn parse_shell_lc_plain_commands(command: &[String]) -> Option<Vec<Vec<Strin
+ /// syntax tree. Dynamic words and redirections are omitted. This is suitable
+ /// for identifying dangerous literal commands, but must not be used to prove
+ /// that a command is safe.
+-pub(crate) fn parse_shell_lc_literal_commands(command: &[String]) -> Option<Vec<Vec<String>>> {
++///
++/// Public so exec-policy can still check literal sub-commands when the strict
++/// plain-command parser rejects a script (e.g. because of `~`, `$HOME`, or a
++/// redirection). See <https://github.com/openai/codex/issues/63384>.
++pub fn parse_shell_lc_literal_commands(command: &[String]) -> Option<Vec<Vec<String>>> {
+     let (_, script) = extract_bash_command(command)?;
+     let tree = try_parse_shell(script)?;
+     let root = tree.root_node();
+@@ -0,0 +1,67 @@
++//! Repro for https://github.com/openai/codex/issues/63384
++//!
++//! The exec-policy path first calls `parse_shell_lc_plain_commands`. If that
++//! returns `None`, `commands_for_exec_policy_for_platform()` (core/exec_policy.rs)
++//! falls back to checking the raw argv `["/bin/zsh", "-lc", "<script>"]`.
++//! Because the strict parser rejects a *whole* script when any word contains
++//! `~` or `$HOME`, a forbidden command spelled literally in the same script is
++//! never checked against prefix rules.
++//!
++//! These tests pin the trigger condition against the real parser code.
++
++use codex_shell_command::bash::parse_shell_lc_plain_commands;
++
++fn zsh_lc(script: &str) -> Vec<String> {
++    vec![
++        "/bin/zsh".to_string(),
++        "-lc".to_string(),
++        script.to_string(),
++    ]
++}
++
++#[test]
++fn row4_forbidden_cat_is_dropped_because_of_tilde_elsewhere() {
++    // Issue row 4: `ls ~ > /dev/null && cat /Users/x/decoy/secret.txt`
++    // `cat /Users/x/decoy/secret.txt` matches a forbidden prefix_rule, but the
++    // `~` in the unrelated first command makes the strict parse fail.
++    let cmd = zsh_lc("ls ~ > /dev/null && cat /Users/x/decoy/secret.txt");
++    assert_eq!(
++        parse_shell_lc_plain_commands(&cmd),
++        None,
++        "strict parser rejects the whole script -> exec policy sees only raw zsh argv"
++    );
++}
++
++#[test]
++fn row6_forbidden_git_push_is_dropped_because_of_tilde_elsewhere() {
++    // Issue row 6: `ls ~ && git push --dry-run /tmp/nonexistent-remote`
++    let cmd = zsh_lc("ls ~ && git push --dry-run /tmp/nonexistent-remote");
++    assert_eq!(
++        parse_shell_lc_plain_commands(&cmd),
++        None,
++        "strict parser rejects the whole script -> `git push` rule never matches"
++    );
++}
++
++#[test]
++fn control_same_scripts_without_tilde_are_parsed_and_would_be_checked() {
++    // Control: without `~`/`$`, both forbidden commands ARE extracted, proving
++    // the only reason rows 4/6 escape is the tilde in the first command.
++    let cat = zsh_lc("ls /tmp > /dev/null && cat /Users/x/decoy/secret.txt");
++    let parsed = parse_shell_lc_plain_commands(&cat).expect("control must parse");
++    assert!(
++        parsed
++            .iter()
++            .any(|c| c.first().map(String::as_str) == Some("cat")),
++        "control script must expose the `cat` command to exec policy: {parsed:?}"
++    );
++
++    let push = zsh_lc("ls /tmp && git push --dry-run /tmp/nonexistent-remote");
++    let parsed = parse_shell_lc_plain_commands(&push).expect("control must parse");
++    assert!(
++        parsed
++            .iter()
++            .any(|c| c.first().map(String::as_str) == Some("git")),
++        "control script must expose the `git` command to exec policy: {parsed:?}"
++    );
++}

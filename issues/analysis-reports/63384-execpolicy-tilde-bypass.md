@@ -5,6 +5,7 @@
 **Area:** `codex-rs/shell-command`, `codex-rs/core` — exec policy / approval enforcement
 **Issue:** https://github.com/openai/codex/issues/63384 (open at time of analysis)
 **Published comment:** https://github.com/openai/codex/issues/63384#issuecomment-7114270956
+**PR (merged):** https://github.com/Shehab-Hegab/codex/pull/1 — **fork PR**: the fix was applied against the fork's `main` (`44fe510`, the fork is 2584 commits behind upstream; upstream sync blocked by the OAuth `workflow` scope) — PR diff +139/−2, 4 files.
 **Artifacts:** https://github.com/Shehab-Hegab/codex-deepstudy/tree/main/issues
 
 ---
@@ -132,15 +133,16 @@ toolchain. The *behaviour* was verified with the real tree-sitter grammar above.
 > fixed it by reusing the repo's existing literal sub-command parser as the
 > fallback, with two regression tests."
 
-## 6. CV bullet (public comment now posted)
+## 6. CV bullet (public comment + merged PR)
 
 ```
 - Reproduced + root-caused openai/codex #63384 (exec-policy `forbidden` bypass via
   `~`/`$HOME`): traced to the raw-argv fallback in
   `commands_for_exec_policy_for_platform()`; implemented a literal-subcommand
-  fallback fix (+138/-1, 4 files, 2 regression tests) —
-  https://github.com/openai/codex/issues/63384#issuecomment-7114270956
+  fallback fix with 2 regression tests.
+  - Analysis: https://github.com/openai/codex/issues/63384#issuecomment-7114270956
+  - Merged PR (fork of openai/codex, main at 44fe510): https://github.com/Shehab-Hegab/codex/pull/1 (+139/−2, 4 files)
 ```
 
-Note for honesty: this is a **published issue analysis + patch**, not a merged PR.
-`openai/codex` does not accept external PRs. Do not write "merged into OpenAI".
+Honest framing: `openai/codex` itself accepts no external PRs — so the merged PR is
+in the **fork** (`Shehab-Hegab/codex`). Do not write "merged into OpenAI".
