@@ -60,7 +60,7 @@ all exec-policy matching gaps that defeat `forbidden`.
 
 ---
 
-## 3. Fix implemented (scratch clone, `git diff`: 57 insertions / 1 deletion)
+## 3. Fix implemented (scratch clone, `git diff`: 4 files, 138 insertions / 1 deletion)
 
 The repo already contained the right tool, unused:
 `parse_shell_lc_literal_commands()` at `bash.rs:133` accepts complex syntax and
@@ -73,9 +73,12 @@ commands to **check**, never to allow them).
 | `shell-command/src/bash.rs` | `pub(crate)` → `pub` on `parse_shell_lc_literal_commands()` + doc |
 | `core/src/exec_policy.rs` | after strict parse fails, fall back to the literal parser and check those sub-commands **before** the raw-argv fallback |
 | `core/src/exec_policy_tests.rs` | 2 regression tests (rows 4 & 6): forbidden literal command must be present in `commands`, and result must not equal raw zsh argv |
+| `shell-command/tests/issue_63384_repro.rs` | 3 tests pinning the trigger: rows 4/6 strict parse returns `None`, plus a control proving the same scripts parse when `~` is replaced with a literal path |
 
-Patch: `issues/repro-steps/63384.patch`
-Regression tests source: `issues/repro-steps/63384-tests.rs`
+Patch: `issues/repro-steps/63384.patch` (verified with `git apply --check --reverse`)
+Repro/tests: `issues/repro-steps/issue_63384_repro.rs`, `issues/repro-steps/verify_63384.py`,
+`issues/repro-steps/verify_63384.rs`, raw output: `issues/repro-steps/verify_63384_output.txt`.
+All four Rust files pass `rustfmt --check` (syntax-valid).
 
 **Deliberately out of scope:** rows 2/3 (the `~/`, `$HOME/` spelling *of the path
 itself*) need tilde/env-expansion normalization. The fix targets rows 4/6 where
@@ -88,7 +91,7 @@ the forbidden command is fully literal and unambiguous.
 ### 4.1 Runtime cross-check with the identical grammar
 `issues/repro-steps/verify_63384.py` ports `is_literal_word_or_number()` and
 `try_parse_word_only_commands_sequence()` **exactly** and runs the real
-`tree-sitter-bash` grammar. Output:
+`tree-sitter-bash` grammar. Raw saved output (`verify_63384_output.txt`):
 
 ```
 ROW | STRICT PARSE (what policy sees today)              | LITERAL PARSE (proposed fallback)

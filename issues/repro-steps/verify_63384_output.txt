@@ -1,0 +1,8 @@
+ROW | STRICT PARSE (what policy sees today) | LITERAL PARSE (proposed fallback)
+----------------------------------------------------------------------------------------------------
+  1 | [['cat', '/Users/x/decoy/secret.txt']] | [['cat', '/Users/x/decoy/secret.txt']]
+  2 | None                                  | [['cat']]
+  3 | None                                  | [['cat']]
+  4 | None                                  | [['cat', '/Users/x/decoy/secret.txt'], ['ls']]
+  5 | [['git', 'push', '--dry-run', '/tmp/nonexistent-remote']] | [['git', 'push', '--dry-run', '/tmp/nonexistent-remote']]
+  6 | None                                  | [['git', 'push', '--dry-run', '/tmp/nonexistent-remote'], ['ls']]
